@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -20,9 +21,11 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	k8sCache "k8s.io/client-go/tools/cache"
+	"k8s.io/klog"
 
 	fv1 "github.com/fission/fission/pkg/apis/core/v1"
 	"github.com/fission/fission/pkg/crd"
+	"github.com/fission/fission/pkg/executor/util"
 	"github.com/fission/fission/pkg/utils"
 )
 
@@ -269,6 +272,11 @@ func checkAndUpdateTriggerFields(mqt, newMqt *fv1.MessageQueueTrigger) bool {
 		updated = true
 	}
 
+	if reflect.DeepEqual(newMqt.Spec.PodSpec, mqt.Spec.PodSpec) != true {
+		newMqt.Spec.PodSpec = mqt.Spec.PodSpec
+		updated = true
+	}
+
 	for key, value := range newMqt.Spec.Metadata {
 		if val, ok := mqt.Spec.Metadata[key]; ok && val != value {
 			mqt.Spec.Metadata[key] = value
@@ -395,6 +403,26 @@ func getDeploymentSpec(mqt *fv1.MessageQueueTrigger, routerURL string, kubeClien
 	image := os.Getenv(strings.ToUpper(imageName))
 	imagePullPolicy := utils.GetImagePullPolicy(os.Getenv("CONNECTOR_IMAGE_PULL_POLICY"))
 
+	podSpec := &apiv1.PodSpec{
+		Containers: []apiv1.Container{
+			{
+				Name:  mqt.ObjectMeta.Name,
+				Image: image,
+				Env:   envVars,
+			},
+		},
+	}
+
+	klog.Infof("Mqt pod spec is %v", mqt.Spec.PodSpec)
+
+	klog.Infof("KEDA connector pod spec before merging is %v", podSpec)
+	podSpec, err = util.MergePodSpec(podSpec, mqt.Spec.PodSpec)
+	if err != nil {
+		klog.Error(err)
+		return nil, err
+	}
+	klog.Infof("KEDA connector pod spec after merging is: %v", podSpec)
+
 	blockOwnerDeletion := true
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -424,16 +452,7 @@ func getDeploymentSpec(mqt *fv1.MessageQueueTrigger, routerURL string, kubeClien
 						"app": mqt.ObjectMeta.Name,
 					},
 				},
-				Spec: apiv1.PodSpec{
-					Containers: []apiv1.Container{
-						{
-							Name:            mqt.ObjectMeta.Name,
-							Image:           image,
-							ImagePullPolicy: imagePullPolicy,
-							Env:             envVars,
-						},
-					},
-				},
+				Spec: *podSpec,
 			},
 		},
 	}, nil

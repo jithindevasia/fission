@@ -768,6 +768,16 @@ type (
 		// Kind of Message Queue Trigger to be created, by default its fission
 		// +optional
 		MqtKind string `json:"mqtkind,omitempty"`
+
+		// (Optional) Podspec allows modification of deployed runtime pod with Kubernetes PodSpec
+		// The merging logic is briefly described below and detailed MergePodSpec function
+		// - Volumes mounts and env variables for function and fetcher container are appended
+		// - All additional containers and init containers are appended
+		// - Volume definitions are appended
+		// - Lists such as tolerations, ImagePullSecrets, HostAliases are appended
+		// - Structs are merged and variables from pod spec take precedence
+		// +optional
+		PodSpec *apiv1.PodSpec `json:"podspec,omitempty"`
 	}
 
 	// TimeTriggerSpec invokes the specific function at a time or
