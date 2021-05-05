@@ -272,6 +272,9 @@ func checkAndUpdateTriggerFields(mqt, newMqt *fv1.MessageQueueTrigger) bool {
 		updated = true
 	}
 
+	klog.Infof(" MQT pod spec is %v", mqt.Spec.PodSpec)
+	klog.Infof(" New MQT pod spec is %v", newMqt.Spec.PodSpec)
+
 	if reflect.DeepEqual(newMqt.Spec.PodSpec, mqt.Spec.PodSpec) != true {
 		newMqt.Spec.PodSpec = mqt.Spec.PodSpec
 		updated = true
@@ -406,9 +409,10 @@ func getDeploymentSpec(mqt *fv1.MessageQueueTrigger, routerURL string, kubeClien
 	podSpec := &apiv1.PodSpec{
 		Containers: []apiv1.Container{
 			{
-				Name:  mqt.ObjectMeta.Name,
-				Image: image,
-				Env:   envVars,
+				Name:            mqt.ObjectMeta.Name,
+				Image:           image,
+				ImagePullPolicy: imagePullPolicy,
+				Env:             envVars,
 			},
 		},
 	}
