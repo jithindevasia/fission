@@ -44,6 +44,7 @@ import (
 )
 
 type (
+	// Executor defines a fission function executor.
 	Executor struct {
 		logger *zap.Logger
 
@@ -55,6 +56,7 @@ type (
 		requestChan chan *createFuncServiceRequest
 		fsCreateWg  map[string]*sync.WaitGroup
 	}
+
 	createFuncServiceRequest struct {
 		function *fv1.Function
 		respChan chan *createFuncServiceResponse
@@ -66,6 +68,7 @@ type (
 	}
 )
 
+// MakeExecutor returns an Executor for given ExecutorType(s).
 func MakeExecutor(logger *zap.Logger, cms *cms.ConfigSecretController,
 	fissionClient *crd.FissionClient, types map[fv1.ExecutorType]executortype.ExecutorType) (*Executor, error) {
 	executor := &Executor{
@@ -235,7 +238,7 @@ func serveMetric(logger *zap.Logger) {
 // StartExecutor Starts executor and the executor components such as Poolmgr,
 // deploymgr and potential future executor types
 func StartExecutor(logger *zap.Logger, functionNamespace string, envBuilderNamespace string, port int) error {
-	fissionClient, kubernetesClient, _, err := crd.MakeFissionClient()
+	fissionClient, kubernetesClient, _, metricsClient, err := crd.MakeFissionClient()
 	if err != nil {
 		return errors.Wrap(err, "failed to get kubernetes client")
 	}
@@ -256,7 +259,7 @@ func StartExecutor(logger *zap.Logger, functionNamespace string, envBuilderNames
 
 	gpm := poolmgr.MakeGenericPoolManager(
 		logger,
-		fissionClient, kubernetesClient,
+		fissionClient, kubernetesClient, metricsClient,
 		functionNamespace, fetcherConfig, executorInstanceID)
 
 	ndm := newdeploy.MakeNewDeploy(

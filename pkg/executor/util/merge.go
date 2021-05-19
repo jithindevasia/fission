@@ -54,6 +54,7 @@ func MergeContainer(dst *apiv1.Container, src *apiv1.Container) (*apiv1.Containe
 	return &dstC, errs.ErrorOrNil()
 }
 
+// MergePodSpec updates srcPodSpec with targetPodSpec fields if not empty
 func MergePodSpec(srcPodSpec *apiv1.PodSpec, targetPodSpec *apiv1.PodSpec) (*apiv1.PodSpec, error) {
 	if targetPodSpec == nil {
 		return srcPodSpec, nil
@@ -123,6 +124,66 @@ func MergePodSpec(srcPodSpec *apiv1.PodSpec, targetPodSpec *apiv1.PodSpec) (*api
 
 	if targetPodSpec.Hostname != "" {
 		srcPodSpec.Hostname = targetPodSpec.Hostname
+	}
+
+	if targetPodSpec.RuntimeClassName != nil {
+		srcPodSpec.RuntimeClassName = targetPodSpec.RuntimeClassName
+	}
+
+	if targetPodSpec.RestartPolicy != "" {
+		srcPodSpec.RestartPolicy = targetPodSpec.RestartPolicy
+	}
+
+	if targetPodSpec.ActiveDeadlineSeconds != nil {
+		srcPodSpec.ActiveDeadlineSeconds = targetPodSpec.ActiveDeadlineSeconds
+	}
+
+	if targetPodSpec.DNSPolicy != "" {
+		srcPodSpec.DNSPolicy = targetPodSpec.DNSPolicy
+	}
+
+	if targetPodSpec.ServiceAccountName != "" {
+		srcPodSpec.ServiceAccountName = targetPodSpec.ServiceAccountName
+	}
+
+	if targetPodSpec.DeprecatedServiceAccount != "" {
+		srcPodSpec.DeprecatedServiceAccount = targetPodSpec.DeprecatedServiceAccount
+	}
+
+	if targetPodSpec.AutomountServiceAccountToken != nil {
+		srcPodSpec.AutomountServiceAccountToken = targetPodSpec.AutomountServiceAccountToken
+	}
+
+	if targetPodSpec.HostNetwork != false {
+		srcPodSpec.HostNetwork = targetPodSpec.HostNetwork
+	}
+
+	if targetPodSpec.HostPID != false {
+		srcPodSpec.HostPID = targetPodSpec.HostPID
+	}
+
+	if targetPodSpec.HostIPC != false {
+		srcPodSpec.HostIPC = targetPodSpec.HostIPC
+	}
+
+	if targetPodSpec.ShareProcessNamespace != nil {
+		srcPodSpec.ShareProcessNamespace = targetPodSpec.ShareProcessNamespace
+	}
+
+	if targetPodSpec.PriorityClassName != "" {
+		srcPodSpec.PriorityClassName = targetPodSpec.PriorityClassName
+	}
+
+	if targetPodSpec.Priority != nil {
+		srcPodSpec.Priority = targetPodSpec.Priority
+	}
+
+	if targetPodSpec.PreemptionPolicy != nil {
+		srcPodSpec.PreemptionPolicy = targetPodSpec.PreemptionPolicy
+	}
+
+	if targetPodSpec.EnableServiceLinks != nil {
+		srcPodSpec.EnableServiceLinks = targetPodSpec.EnableServiceLinks
 	}
 
 	srcPodSpec.ImagePullSecrets = append(srcPodSpec.ImagePullSecrets, targetPodSpec.ImagePullSecrets...)

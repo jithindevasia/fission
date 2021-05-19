@@ -23,6 +23,7 @@ import (
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -30,13 +31,14 @@ import (
 	"github.com/fission/fission/pkg/cache"
 	"github.com/fission/fission/pkg/crd"
 	ferror "github.com/fission/fission/pkg/error"
-	poolcache "github.com/fission/fission/pkg/newcache"
+	"github.com/fission/fission/pkg/poolcache"
 )
 
 type fscRequestType int
 
 //type executorType int
 
+// FunctionServiceCache Request Types
 const (
 	TOUCH fscRequestType = iota
 	LISTOLD
@@ -45,6 +47,7 @@ const (
 )
 
 type (
+	// FuncSvc represents a function service
 	FuncSvc struct {
 		Name              string                  // Name of object
 		Function          *metav1.ObjectMeta      // function this pod/service is for
@@ -52,32 +55,38 @@ type (
 		Address           string                  // Host:Port or IP:Port that the function's service can be reached at.
 		KubernetesObjects []apiv1.ObjectReference // Kubernetes Objects (within the function namespace)
 		Executor          fv1.ExecutorType
+		CPULimit          resource.Quantity
 
 		Ctime time.Time
 		Atime time.Time
 	}
 
+	// FunctionServiceCache represents the function service cache
 	FunctionServiceCache struct {
 		logger            *zap.Logger
 		byFunction        *cache.Cache     // function-key -> funcSvc  : map[string]*funcSvc
 		byAddress         *cache.Cache     // address      -> function : map[string]metav1.ObjectMeta
 		byFunctionUID     *cache.Cache     // function uid -> function : map[string]metav1.ObjectMeta
 		connFunctionCache *poolcache.Cache // function-key -> funcSvc : map[string]*funcSvc
-
-		requestChannel chan *fscRequest
+		PodToFsvc         map[string]*FuncSvc
+		WebsocketFsvc     map[string]bool
+		requestChannel    chan *fscRequest
 	}
+
 	fscRequest struct {
 		requestType     fscRequestType
 		address         string
 		age             time.Duration
 		responseChannel chan *fscResponse
 	}
+
 	fscResponse struct {
 		objects []*FuncSvc
 		error
 	}
 )
 
+// IsNotFoundError checks if err is ErrorNotFound.
 func IsNotFoundError(err error) bool {
 	if fe, ok := err.(ferror.Error); ok {
 		return fe.Code == ferror.ErrorNotFound
@@ -85,6 +94,7 @@ func IsNotFoundError(err error) bool {
 	return false
 }
 
+// IsNameExistError checks if err is ErrorNameExists.
 func IsNameExistError(err error) bool {
 	if fe, ok := err.(ferror.Error); ok {
 		return fe.Code == ferror.ErrorNameExists
@@ -92,6 +102,7 @@ func IsNameExistError(err error) bool {
 	return false
 }
 
+// MakeFunctionServiceCache starts and returns an instance of FunctionServiceCache.
 func MakeFunctionServiceCache(logger *zap.Logger) *FunctionServiceCache {
 	fsc := &FunctionServiceCache{
 		logger:            logger.Named("function_service_cache"),
@@ -100,6 +111,8 @@ func MakeFunctionServiceCache(logger *zap.Logger) *FunctionServiceCache {
 		byFunctionUID:     cache.MakeCache(0, 0),
 		connFunctionCache: poolcache.NewPoolCache(),
 		requestChannel:    make(chan *fscRequest),
+		PodToFsvc:         make(map[string]*FuncSvc),
+		WebsocketFsvc:     make(map[string]bool),
 	}
 	go fsc.service()
 	return fsc
@@ -139,8 +152,7 @@ func (fsc *FunctionServiceCache) service() {
 			fscs := fsc.connFunctionCache.ListAvailableValue()
 			funcObjects := make([]*FuncSvc, 0)
 			for _, funcSvc := range fscs {
-				fsvc := funcSvc.(*FuncSvc)
-				if time.Since(fsvc.Atime) > req.age {
+				if fsvc, ok := funcSvc.(*FuncSvc); ok && time.Since(fsvc.Atime) > req.age {
 					funcObjects = append(funcObjects, fsvc)
 				}
 			}
@@ -151,6 +163,7 @@ func (fsc *FunctionServiceCache) service() {
 	}
 }
 
+// GetByFunction gets a function service from cache using function key.
 func (fsc *FunctionServiceCache) GetByFunction(m *metav1.ObjectMeta) (*FuncSvc, error) {
 	key := crd.CacheKey(m)
 
@@ -167,13 +180,14 @@ func (fsc *FunctionServiceCache) GetByFunction(m *metav1.ObjectMeta) (*FuncSvc, 
 	return &fsvcCopy, nil
 }
 
-func (fsc *FunctionServiceCache) GetFuncSvc(m *metav1.ObjectMeta) (*FuncSvc, error) {
+// GetFuncSvc gets a function service from pool cache using function key and returns number of active instances of function pod
+func (fsc *FunctionServiceCache) GetFuncSvc(m *metav1.ObjectMeta, requestsPerPod int) (*FuncSvc, int, error) {
 	key := crd.CacheKey(m)
 
-	fsvcI, err := fsc.connFunctionCache.GetValue(key)
+	fsvcI, active, err := fsc.connFunctionCache.GetValue(key, requestsPerPod)
 	if err != nil {
 		fsc.logger.Info("Not found in Cache")
-		return nil, err
+		return nil, active, err
 	}
 
 	// update atime
@@ -181,9 +195,10 @@ func (fsc *FunctionServiceCache) GetFuncSvc(m *metav1.ObjectMeta) (*FuncSvc, err
 	fsvc.Atime = time.Now()
 
 	fsvcCopy := *fsvc
-	return &fsvcCopy, nil
+	return &fsvcCopy, active, nil
 }
 
+// GetByFunctionUID gets a function service from cache using function UUID.
 func (fsc *FunctionServiceCache) GetByFunctionUID(uid types.UID) (*FuncSvc, error) {
 	mI, err := fsc.byFunctionUID.Get(uid)
 	if err != nil {
@@ -205,8 +220,9 @@ func (fsc *FunctionServiceCache) GetByFunctionUID(uid types.UID) (*FuncSvc, erro
 	return &fsvcCopy, nil
 }
 
+// AddFunc adds a function service to pool cache.
 func (fsc *FunctionServiceCache) AddFunc(fsvc FuncSvc) {
-	fsc.connFunctionCache.SetValue(crd.CacheKey(fsvc.Function), fsvc.Address, &fsvc)
+	fsc.connFunctionCache.SetValue(crd.CacheKey(fsvc.Function), fsvc.Address, &fsvc, fsvc.CPULimit)
 	now := time.Now()
 	fsvc.Ctime = now
 	fsvc.Atime = now
@@ -214,14 +230,17 @@ func (fsc *FunctionServiceCache) AddFunc(fsvc FuncSvc) {
 	fsc.setFuncAlive(fsvc.Function.Name, string(fsvc.Function.UID), true)
 }
 
-func (fsc *FunctionServiceCache) GetTotalAvailable(m *metav1.ObjectMeta) int {
-	return fsc.connFunctionCache.GetTotalAvailable(crd.CacheKey(m))
+// SetCPUUtilizaton updates/sets CPUutilization in the pool cache
+func (fsc *FunctionServiceCache) SetCPUUtilizaton(key string, svcHost string, cpuUsage resource.Quantity) {
+	fsc.connFunctionCache.SetCPUUtilization(key, svcHost, cpuUsage)
 }
 
+// MarkAvailable marks the value at key [function][address] as available.
 func (fsc *FunctionServiceCache) MarkAvailable(key string, svcHost string) {
 	fsc.connFunctionCache.MarkAvailable(key, svcHost)
 }
 
+// Add adds a function service to cache if it does not exist already.
 func (fsc *FunctionServiceCache) Add(fsvc FuncSvc) (*FuncSvc, error) {
 	existing, err := fsc.byFunction.Set(crd.CacheKey(fsvc.Function), &fsvc)
 	if err != nil {
@@ -268,6 +287,7 @@ func (fsc *FunctionServiceCache) Add(fsvc FuncSvc) (*FuncSvc, error) {
 	return nil, nil
 }
 
+// TouchByAddress makes a TOUCH request to given address.
 func (fsc *FunctionServiceCache) TouchByAddress(address string) error {
 	responseChannel := make(chan *fscResponse)
 	fsc.requestChannel <- &fscRequest{
@@ -294,20 +314,59 @@ func (fsc *FunctionServiceCache) _touchByAddress(address string) error {
 	return nil
 }
 
+// DeleteEntry deletes a function service from cache.
 func (fsc *FunctionServiceCache) DeleteEntry(fsvc *FuncSvc) {
-	fsc.byFunction.Delete(crd.CacheKey(fsvc.Function))
-	fsc.byAddress.Delete(fsvc.Address)
-	fsc.byFunctionUID.Delete(fsvc.Function.UID)
+	msg := "error deleting function service"
+	err := fsc.byFunction.Delete(crd.CacheKey(fsvc.Function))
+	if err != nil {
+		fsc.logger.Error(
+			msg,
+			zap.String("function", fsvc.Function.Name),
+			zap.Error(err),
+		)
+	}
+
+	err = fsc.byAddress.Delete(fsvc.Address)
+	if err != nil {
+		fsc.logger.Error(
+			msg,
+			zap.String("function", fsvc.Function.Name),
+			zap.Error(err),
+		)
+	}
+
+	err = fsc.byFunctionUID.Delete(fsvc.Function.UID)
+	if err != nil {
+		fsc.logger.Error(
+			msg,
+			zap.String("function", fsvc.Function.Name),
+			zap.Error(err),
+		)
+	}
 
 	fsc.observeFuncRunningTime(fsvc.Function.Name, string(fsvc.Function.UID), fsvc.Atime.Sub(fsvc.Ctime).Seconds())
 	fsc.observeFuncAliveTime(fsvc.Function.Name, string(fsvc.Function.UID), time.Since(fsvc.Ctime).Seconds())
 	fsc.setFuncAlive(fsvc.Function.Name, string(fsvc.Function.UID), false)
 }
 
+// DeleteFunctionSvc deletes a function service at key composed of [function][address].
 func (fsc *FunctionServiceCache) DeleteFunctionSvc(fsvc *FuncSvc) {
-	fsc.connFunctionCache.DeleteValue(crd.CacheKey(fsvc.Function), fsvc.Address)
+	err := fsc.connFunctionCache.DeleteValue(crd.CacheKey(fsvc.Function), fsvc.Address)
+	if err != nil {
+		fsc.logger.Error(
+			"error deleting function service",
+			zap.Any("function", fsvc.Function.Name),
+			zap.Any("address", fsvc.Address),
+			zap.Error(err),
+		)
+	}
 }
 
+func (fsc *FunctionServiceCache) SetCPUUtilization(key string, svcHost string, cpuUsage resource.Quantity) {
+	fsc.connFunctionCache.SetCPUUtilization(key, svcHost, cpuUsage)
+}
+
+// DeleteOld deletes aged function service entries from cache.
 func (fsc *FunctionServiceCache) DeleteOld(fsvc *FuncSvc, minAge time.Duration) (bool, error) {
 	if time.Since(fsvc.Atime) < minAge {
 		return false, nil
@@ -318,6 +377,7 @@ func (fsc *FunctionServiceCache) DeleteOld(fsvc *FuncSvc, minAge time.Duration) 
 	return true, nil
 }
 
+// DeleteOldPoolCache deletes aged function service entries from pool cache.
 func (fsc *FunctionServiceCache) DeleteOldPoolCache(fsvc *FuncSvc, minAge time.Duration) (bool, error) {
 	if time.Since(fsvc.Atime) < minAge {
 		return false, nil
@@ -328,6 +388,7 @@ func (fsc *FunctionServiceCache) DeleteOldPoolCache(fsvc *FuncSvc, minAge time.D
 	return true, nil
 }
 
+// ListOld returns a list of aged function services in cache.
 func (fsc *FunctionServiceCache) ListOld(age time.Duration) ([]*FuncSvc, error) {
 	responseChannel := make(chan *fscResponse)
 	fsc.requestChannel <- &fscRequest{
@@ -339,6 +400,7 @@ func (fsc *FunctionServiceCache) ListOld(age time.Duration) ([]*FuncSvc, error) 
 	return resp.objects, resp.error
 }
 
+// ListOldForPool returns a list of aged function serices in cache for pooling.
 func (fsc *FunctionServiceCache) ListOldForPool(age time.Duration) ([]*FuncSvc, error) {
 	responseChannel := make(chan *fscResponse)
 	fsc.requestChannel <- &fscRequest{
@@ -350,6 +412,7 @@ func (fsc *FunctionServiceCache) ListOldForPool(age time.Duration) ([]*FuncSvc, 
 	return resp.objects, resp.error
 }
 
+// Log makes a LOG type cache request.
 func (fsc *FunctionServiceCache) Log() {
 	fsc.logger.Info("--- FunctionService Cache Contents")
 	responseChannel := make(chan *fscResponse)

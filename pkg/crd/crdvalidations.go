@@ -32,8 +32,9 @@ var (
 				"secrets":     secretReferenceSchema,
 				"configmaps":  configMapReferenceSchema,
 				"resources": {
-					Type:        "object",
-					Description: "ResourceRequirements describes the compute resource requirements. This is only for newdeploy to set up resource limitation when creating deployment for a function.",
+					Type:                   "object",
+					Description:            "ResourceRequirements describes the compute resource requirements. This is only for newdeploy to set up resource limitation when creating deployment for a function.",
+					XPreserveUnknownFields: boolPtr(true),
 				},
 				"InvokeStrategy": invokeStrategySchema,
 				"functionTimeout": {
@@ -46,7 +47,11 @@ var (
 				},
 				"concurrency": {
 					Type:        "integer",
-					Description: "Concurrency specifies the maximum number of pods that can be specialized concurrently to serve requests.\n This is optional. If not specified default value will be taken as 5",
+					Description: "Concurrency specifies the maximum number of pods that can be specialized concurrently to serve requests.\n This is optional. If not specified default value will be taken as 500",
+				},
+				"requestsPerPod": {
+					Type:        "integer",
+					Description: "RequestsPerPod indicates the maximum number of concurrent requests that can be served by a specialized pod.\n This is optional. If not specified default value will be taken as 1",
 				},
 			},
 		},
@@ -87,8 +92,9 @@ var (
 					Description: "To enable accessibility of external network for builder/function pod, set to 'true'.",
 				},
 				"resources": {
-					Type:        "object",
-					Description: "The request and limit CPU/MEM resource setting for the pods of the function. Can be overridden at Function in case of newdeployment executor type",
+					Type:                   "object",
+					Description:            "The request and limit CPU/MEM resource setting for the pods of the function. Can be overridden at Function in case of newdeployment executor type",
+					XPreserveUnknownFields: boolPtr(true),
 				},
 				"poolsize": {
 					Type:        "integer",
