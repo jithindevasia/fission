@@ -268,15 +268,14 @@ func checkAndUpdateTriggerFields(mqt, newMqt *fv1.MessageQueueTrigger) bool {
 		updated = true
 	}
 	if len(newMqt.Spec.FunctionReference.Name) > 0 && newMqt.Spec.FunctionReference.Name != mqt.Spec.FunctionReference.Name {
-		newMqt.Spec.FunctionReference.Name = mqt.Spec.FunctionReference.Name
+		mqt.Spec.FunctionReference.Name = newMqt.Spec.FunctionReference.Name
 		updated = true
 	}
 
 	klog.Infof(" MQT pod spec is %v", mqt.Spec.PodSpec)
 	klog.Infof(" New MQT pod spec is %v", newMqt.Spec.PodSpec)
-
-	if reflect.DeepEqual(newMqt.Spec.PodSpec, mqt.Spec.PodSpec) != true {
-		newMqt.Spec.PodSpec = mqt.Spec.PodSpec
+	if !reflect.DeepEqual(newMqt.Spec.PodSpec, mqt.Spec.PodSpec) {
+		mqt.Spec.PodSpec = newMqt.Spec.PodSpec
 		updated = true
 	}
 
